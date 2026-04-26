@@ -1,0 +1,242 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>IT Search - Warp Drive SPA</title>
+    <script src="https://unpkg.com/@studio-freight/lenis@1.0.33/dist/lenis.min.js"></script>
+    <style>
+        :root {
+            --bg: #0b0f14;
+            --brand: #06b6d4;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            color: white;
+            font-family: sans-serif;
+            background: radial-gradient(1200px 800px at 80% 10%, rgba(124, 58, 237, .25), transparent 60%), radial-gradient(1000px 700px at 10% 90%, rgba(6, 182, 212, .22), transparent 55%), var(--bg);
+            height: 600vh;
+            overflow-x: hidden;
+        }
+
+        #star-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            opacity: 0.8;
+            will-change: transform, opacity;
+        }
+
+        /* ОСНОВНОЙ КОНТЕЙНЕР */
+        .page-content {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            text-align: center;
+            width: 100%;
+            max-width: 800px;
+            transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+            /* СОСТОЯНИЕ КОГДА ЕСТЬ РЕЗУЛЬТАТЫ (уезжаем наверх) */
+            .page-content.active {
+                top: 10%;
+                transform: translate(-50%, 0);
+            }
+
+        h1 {
+            font-size: 5rem;
+            margin-bottom: 30px;
+            transition: all 0.4s;
+            background: linear-gradient(135deg, #fff 30%, var(--brand) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .page-content.active h1 {
+            font-size: 2rem;
+            margin-bottom: 15px;
+        }
+
+        .search-wrapper {
+            display: inline-flex;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 50px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .mainbox {
+            width: 500px;
+            height: 50px;
+            background: #000;
+            display: flex;
+            flex-direction: row-reverse;
+            align-items: center;
+            border-radius: 160px;
+        }
+
+        .search_input {
+            width: 400px;
+            background: transparent;
+            border: none;
+            color: white;
+            outline: none;
+            font-size: 18px;
+        }
+
+        .iconContainer {
+            width: 60px;
+            display: flex;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        /* БЛОК РЕЗУЛЬТАТОВ */
+        #results {
+            margin-top: 50px;
+            text-align: left;
+            opacity: 0;
+            transition: opacity 0.5s;
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+
+        .page-content.active #results {
+            opacity: 1;
+        }
+
+        /* КАРТОЧКА РЕЗУЛЬТАТА */
+        .result-card {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 12px;
+            border-left: 3px solid var(--brand);
+        }
+
+            .result-card cite {
+                color: var(--brand);
+                font-size: 13px;
+                display: block;
+                margin-bottom: 5px;
+            }
+
+            .result-card a {
+                color: #fff;
+                font-size: 1.3rem;
+                text-decoration: none;
+                font-weight: bold;
+            }
+
+                .result-card a:hover {
+                    text-decoration: underline;
+                }
+
+            .result-card span {
+                display: block;
+                color: #aab9c6;
+                font-size: 12px;
+                margin-top: 5px;
+            }
+
+        /* Скроллбар для результатов */
+        #results::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        #results::-webkit-scrollbar-thumb {
+            background: var(--brand);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="star-container"></div>
+
+    <div class="page-content" id="main-ui">
+        <h1>IT SEARCH</h1>
+        <form id="search-form">
+            <div class="search-wrapper">
+                <div class="mainbox">
+                    <div class="iconContainer" onclick="document.getElementById('search-form').requestSubmit()">
+                        <svg viewBox="0 0 512 512" height="1.2em" fill="white"><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"></path></svg>
+                    </div>
+                    <input class="search_input" placeholder="Search technology..." type="text" name="query" required autofocus>
+                </div>
+            </div>
+        </form>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        // 1. Плавный скролл
+        const lenis = new Lenis({ duration: 1.2, easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), smooth: true });
+        function raf(time) { lenis.raf(time); requestAnimationFrame(raf); }
+        requestAnimationFrame(raf);
+
+        // 2. Звезды Warp Speed
+        const container = document.getElementById('star-container');
+        const stars = [];
+        for (let i = 0; i < 150; i++) {
+            const s = document.createElement('div');
+            s.className = 'star';
+            const x = Math.random() * 100, y = Math.random() * 100;
+            const z = 0.1 + Math.random() * 0.7, size = 1 + Math.random() * 2;
+            s.style.left = x + '%'; s.style.top = y + '%'; s.style.width = size + 'px'; s.style.height = size + 'px';
+            container.appendChild(s);
+            stars.push({ el: s, initialY: y, speed: z });
+        }
+        lenis.on('scroll', ({ scroll, velocity }) => {
+            const stretch = Math.max(1, Math.min(1 + Math.abs(velocity) * 0.3, 15));
+            stars.forEach(star => {
+                let pos = (star.initialY - (scroll * star.speed * 0.05)) % 100;
+                if (pos < 0) pos += 100;
+                star.el.style.top = pos + '%';
+                star.el.style.transform = `scaleY(${stretch})`;
+            });
+        });
+
+        // 3. ЖИВОЙ ПОИСК (AJAX)
+        const form = document.getElementById('search-form');
+        const resultsDiv = document.getElementById('results');
+        const mainUI = document.getElementById('main-ui');
+
+        form.onsubmit = async (e) => {
+            e.preventDefault(); // Запрещаем перезагрузку страницы
+
+            const formData = new FormData(form);
+            const query = formData.get('query');
+
+            // Отправляем запрос на сервер
+            const response = await fetch('/', {
+                method: 'POST',
+                body: 'query=' + encodeURIComponent(query),
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
+
+            const html = await response.text();
+
+            // Вставляем результат и анимируем интерфейс
+            resultsDiv.innerHTML = html;
+            mainUI.classList.add('active'); // Поднимаем поиск наверх
+        };
+    </script>
+</body>
+</html>
