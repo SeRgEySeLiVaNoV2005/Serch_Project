@@ -9,6 +9,7 @@
 #include <boost/asio/ssl.hpp>
 #include <iostream>
 #include <iomanip>
+#include <string>
 #include <openssl/ssl.h>
 #include <regex>
 
@@ -95,20 +96,39 @@ void Spider::process_url(std::string url, int current_depth, int max_depth) {
             }
 
             if (current_depth < max_depth) {
+                // ... внутри process_url после extract_links ...
                 std::vector<std::string> links = extract_links(html);
 
                 for (std::string& link : links) {
-                    auto hash_pos = link.find('#');
-                    if (hash_pos != std::string::npos) link = link.substr(0, hash_pos);
-
-                    if (link.find("/") == 0 && link.find("//") != 0) {
-                        link = (is_https ? "https://" : "http://") + host + link;
+                    // 1. Удаляем фрагменты (всё после #)
+                    size_t hash_pos = link.find('#');
+                    if (hash_pos != std::string::npos) {
+                        link = link.substr(0, hash_pos);
                     }
-                    else if (link.find("//") == 0) {
-                        link = (is_https ? "https:" : "http:") + link;
+                    if (link.empty()) continue;
+
+                    // 2. Обработка относительных ссылок
+                    if (link.find("http") != 0) { // Если ссылка не начинается с http
+                        if (link.find("//") == 0) {
+                            // Протокол-относительная ссылка (//example.com)
+                            link = (is_https ? "https:" : "http:") + link;
+                        }
+                        else if (link.find("/") == 0) {
+                            // Относительная от корня (/page)
+                            link = (is_https ? "https://" : "http://") + host + link;
+                        }
+                        else {
+                            // Относительная от текущей папки (page.html)
+                            // Достраиваем путь
+                            std::string path = target.substr(0, target.find_last_of('/') + 1);
+                            link = (is_https ? "https://" : "http://") + host + path + link;
+                        }
                     }
 
+                    // 3. Фильтруем почищенную и полную ссылку
                     if (!is_useful_link(link)) continue;
+
+                    // 4. Добавляем в пул
                     active_tasks++;
                     boost::asio::post(pool, [this, link, current_depth, max_depth]() {
                         process_url(link, current_depth + 1, max_depth);
@@ -129,71 +149,88 @@ void Spider::process_url(std::string url, int current_depth, int max_depth) {
     active_tasks--;
 }
 
-std::string Spider::download(const std::string& host, const std::string& target, bool is_https) {
+std::string Spider::download(const std::string& host, const std::string& target, bool is_https, int redirect_limit) {
+    // Если лимит редиректов исчерпан - выходим
+    if (redirect_limit <= 0) return "";
+
     try {
         net::io_context ioc;
+        ssl::context ctx(ssl::context::tlsv12_client);
+        ctx.set_verify_mode(ssl::verify_none); // Для учебного проекта отключаем проверку сертификатов
+
         tcp::resolver resolver(ioc);
+        beast::ssl_stream<beast::tcp_stream> stream(ioc, ctx);
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
 
+        // Установка SNI
+        if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
+            return "";
+        }
+
+        auto const results = resolver.resolve(host, is_https ? "443" : "80");
+        beast::get_lowest_layer(stream).connect(results);
+
+        // Если это HTTPS, делаем Handshake
         if (is_https) {
-            ssl::context ctx(ssl::context::tlsv12_client);
-
-            ctx.set_verify_mode(ssl::verify_none);
-
-            beast::ssl_stream<beast::tcp_stream> stream(ioc, ctx);
-
-            if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
-                return "";
-            }
-
-            auto const results = resolver.resolve(host, "443");
-            beast::get_lowest_layer(stream).connect(results);
             stream.handshake(ssl::stream_base::client);
+        }
 
-            http::request<http::string_body> req{ http::verb::get, target, 11 };
-            req.set(http::field::host, host);
-            req.set(http::field::user_agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-            req.set(http::field::accept_encoding, "identity");
+        // Формируем запрос
+        http::request<http::string_body> req{ http::verb::get, target, 11 };
+        req.set(http::field::host, host);
+        req.set(http::field::user_agent, "Mozilla/5.0");
+        req.set(http::field::accept_encoding, "identity");
 
-            http::write(stream, req);
+        http::write(stream, req);
 
-            beast::flat_buffer buffer;
-            http::response<http::string_body> res;
-            http::read(stream, buffer, res);
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
 
-            std::cout << "HTTP Status: " << res.result_int() << " for " << host << target << std::endl;
+        // --- ОБРАБОТКА РЕДИРЕКТОВ ---
+        unsigned int status = res.result_int();
+        if (status >= 300 && status < 400) {
+            std::string location = std::string(res[http::field::location]);
+            if (location.empty()) return "";
 
-            if (res.result_int() != 200) {
-                return "";
+            std::string new_host, new_target;
+            bool new_https = is_https;
+
+            // Если редирект на полный URL (начинается с http)
+            if (location.find("http") == 0) {
+                new_https = (location.find("https://") == 0);
+                std::string temp = location.substr(new_https ? 8 : 7);
+                auto pos = temp.find('/');
+                if (pos == std::string::npos) {
+                    new_host = temp;
+                    new_target = "/";
+                }
+                else {
+                    new_host = temp.substr(0, pos);
+                    new_target = temp.substr(pos);
+                }
+            }
+            // Если редирект на относительный путь внутри того же хоста
+            else {
+                new_host = host;
+                new_target = location;
             }
 
-
-            beast::error_code ec;
-            stream.shutdown(ec);
-
-            return res.body();
+            // Рекурсивный вызов с уменьшенным лимитом
+            return download(new_host, new_target, new_https, redirect_limit - 1);
         }
-        else {
-            beast::tcp_stream stream(ioc);
-            auto const results = resolver.resolve(host, "80");
-            stream.connect(results);
 
-            http::request<http::string_body> req{ http::verb::get, target, 11 };
-            req.set(http::field::host, host);
-            req.set(http::field::user_agent, "Mozilla/5.0");
-            req.set(http::field::accept_encoding, "identity"); // Запрещаем сжатие
-            http::write(stream, req);
+        // Если статус не 200 OK - считаем страницу невалидной
+        if (res.result() != http::status::ok) return "";
 
-            beast::flat_buffer buffer;
-            http::response<http::string_body> res;
-            http::read(stream, buffer, res);
+        // Закрываем соединение (мягко для SSL)
+        beast::error_code ec;
+        stream.shutdown(ec);
 
-            beast::error_code ec;
-            stream.socket().shutdown(tcp::socket::shutdown_both, ec);
-
-            return res.body();
-        }
+        return res.body();
     }
-    catch (std::exception const& e) {
+    catch (const std::exception& e) {
+        // Логируем ошибку, если нужно: std::cerr << "Download error: " << e.what() << std::endl;
         return "";
     }
 }
@@ -214,43 +251,43 @@ std::vector<std::string> Spider::extract_links(const std::string& html) {
     return links;
 }
 bool Spider::is_useful_link(const std::string& url) {
-    if (url.find("mailto:") == 0 || url.find("tel:") == 0 || url.find("javascript:") == 0) {
-        return false;
-    }
+    // 1. Базовые проверки (почта, телефон, файлы) - оставляем как было
+    if (url.find("mailto:") == 0 || url.find("tel:") == 0 || url.find("javascript:") == 0) return false;
 
     static const std::vector<std::string> blacklisted_ext = {
-        ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".zip", ".rar", ".exe", ".docx", ".mp3", ".mp4"
+        ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".zip", ".rar", ".exe", ".docx", ".mp3", ".mp4", ".css", ".js"
     };
     for (const auto& ext : blacklisted_ext) {
-        if (url.size() >= ext.size() &&
-            url.compare(url.size() - ext.size(), ext.size(), ext) == 0) return false;
+        if (url.size() >= ext.size() && url.compare(url.size() - ext.size(), ext.size(), ext) == 0) return false;
     }
 
-    static const std::vector<std::string> blacklisted_keywords = {
-        "adserver", "banner", "pixel", "marketing", "click"
-        "login", "signup", "logout", "auth", "profile",    
-        "settings", "config", "theme", "lang=", "set_lang",   
-        "action=edit", "action=history", "printable=yes",  
-        "contact", "support", "help", "privacy", "terms"      
-    };
+    // 2. ЯЗЫКОВОЙ ФИЛЬТР ДЛЯ ПОДДОМЕНОВ
+    // Если в URL есть признаки других языков в начале домена (например, et.wikipedia, fr.wikipedia)
+    // Мы блокируем их, ЕСЛИ это не ru. или en.
 
-    std::string url_lower = url;
-    std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
-
-    for (const auto& word : blacklisted_keywords) {
-        if (url_lower.find(word) != std::string::npos) return false;
-    }
-
-    if (url.find("https://") == 0) {
-        if (url.find("https://ru.wikipedia.org") != 0 &&
-            url.find("https://en.wikipedia.org") != 0) {
-            return false;
+    // Проверяем формат "язык.сайт.com"
+    std::regex lang_subdomain_regex(R"(https?://([a-z]{2})\.)");
+    std::smatch match;
+    if (std::regex_search(url, match, lang_subdomain_regex)) {
+        std::string lang = match[1].str();
+        // Если поддомен состоит из 2 букв (код страны) и это не ru/en - блокируем
+        if (lang != "ru" && lang != "en" && lang != "www") {
+            // Исключение: разрешаем сайты, где 2 буквы это часть имени (например, it.me), 
+            // но для Википедии это работает идеально.
+            if (url.find("wikipedia.org") != std::string::npos) {
+                return false;
+            }
         }
     }
 
-    if (url.find("/wiki/") != std::string::npos) {
-        std::string path = url.substr(url.find("/wiki/") + 6);
-        if (path.find(":") != std::string::npos) return false;
+    // 3. Фильтр мусорных слов (оставляем)
+    static const std::vector<std::string> blacklisted_keywords = {
+        "adserver", "banner", "marketing", "click", "set_lang", "lang="
+    };
+    std::string url_lower = url;
+    std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
+    for (const auto& word : blacklisted_keywords) {
+        if (url_lower.find(word) != std::string::npos) return false;
     }
 
     return true;

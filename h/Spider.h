@@ -17,7 +17,7 @@ public:
 private:
     void process_url(std::string url, int current_depth, int max_depth);
 
-    std::string download(const std::string& host, const std::string& target, bool is_https);
+    std::string download(const std::string& host, const std::string& target, bool is_https, int redirect_limit = 5);
     std::vector<std::string> extract_links(const std::string& html);
     bool is_useful_link(const std::string& url);
     std::string url_encode(const std::string& value);

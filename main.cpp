@@ -34,7 +34,7 @@ int main() {
         std::cout << "=== Запуск индексации (Паук) ===" << std::endl;
         std::cout << "Стартовый URL: " << cfg.start_url << std::endl;
 
-        Spider spider(db, 4);
+        Spider spider(db, 32);
         spider.run(cfg.start_url, cfg.recursion_depth);
 
         std::cout << "=== Индексация завершена! ===" << std::endl;
