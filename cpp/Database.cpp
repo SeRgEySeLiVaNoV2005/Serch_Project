@@ -43,29 +43,35 @@ void Database::create_tables() {
 }
 
 void Database::save_indexing_result(const std::string& url, const std::map<std::string, int>& word_freq) {
-    pqxx::work W(*conn);
+    if (word_freq.empty()) return;
 
-    auto res_doc = W.exec_params(
-        "INSERT INTO documents (url) VALUES ($1) ON CONFLICT (url) DO UPDATE SET url=EXCLUDED.url RETURNING id",
-        url
-    );
-    int doc_id = res_doc[0][0].as<int>();
-
-    for (const auto& [word, count] : word_freq) {
-        auto res_word = W.exec_params(
-            "INSERT INTO words (word) VALUES ($1) ON CONFLICT (word) DO UPDATE SET word=EXCLUDED.word RETURNING id",
-            word
+    try {
+        pqxx::work W(*conn);
+        auto res_doc = W.exec_params(
+            "INSERT INTO documents (url) VALUES ($1) ON CONFLICT (url) DO UPDATE SET url=EXCLUDED.url RETURNING id",
+            url
         );
-        int word_id = res_word[0][0].as<int>();
+        int doc_id = res_doc[0][0].as<int>();
 
-        W.exec_params(
-            "INSERT INTO index (word_id, document_id, count) VALUES ($1, $2, $3) "
-            "ON CONFLICT (word_id, document_id) DO UPDATE SET count = EXCLUDED.count",
-            word_id, doc_id, count
-        );
+        for (const auto& [word, count] : word_freq) {
+            auto res_word = W.exec_params(
+                "INSERT INTO words (word) VALUES ($1) ON CONFLICT (word) DO UPDATE SET word=EXCLUDED.word RETURNING id",
+                word
+            );
+            int word_id = res_word[0][0].as<int>();
+
+            W.exec_params(
+                "INSERT INTO index (word_id, document_id, count) VALUES ($1, $2, $3) "
+                "ON CONFLICT (word_id, document_id) DO UPDATE SET count = EXCLUDED.count",
+                word_id, doc_id, count
+            );
+        }
+
+        W.commit();
     }
-
-    W.commit();
+    catch (const std::exception& e) {
+        std::cerr << "Database error: " << e.what() << std::endl;
+    }
 }
 
 std::vector<SearchResult> Database::search(const std::vector<std::string>& query_words) {

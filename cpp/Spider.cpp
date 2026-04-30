@@ -96,39 +96,29 @@ void Spider::process_url(std::string url, int current_depth, int max_depth) {
             }
 
             if (current_depth < max_depth) {
-                // ... внутри process_url после extract_links ...
                 std::vector<std::string> links = extract_links(html);
 
                 for (std::string& link : links) {
-                    // 1. Удаляем фрагменты (всё после #)
                     size_t hash_pos = link.find('#');
                     if (hash_pos != std::string::npos) {
                         link = link.substr(0, hash_pos);
                     }
                     if (link.empty()) continue;
 
-                    // 2. Обработка относительных ссылок
-                    if (link.find("http") != 0) { // Если ссылка не начинается с http
+                    if (link.find("http") != 0) {
                         if (link.find("//") == 0) {
-                            // Протокол-относительная ссылка (//example.com)
                             link = (is_https ? "https:" : "http:") + link;
                         }
                         else if (link.find("/") == 0) {
-                            // Относительная от корня (/page)
                             link = (is_https ? "https://" : "http://") + host + link;
                         }
                         else {
-                            // Относительная от текущей папки (page.html)
-                            // Достраиваем путь
                             std::string path = target.substr(0, target.find_last_of('/') + 1);
                             link = (is_https ? "https://" : "http://") + host + path + link;
                         }
                     }
 
-                    // 3. Фильтруем почищенную и полную ссылку
                     if (!is_useful_link(link)) continue;
-
-                    // 4. Добавляем в пул
                     active_tasks++;
                     boost::asio::post(pool, [this, link, current_depth, max_depth]() {
                         process_url(link, current_depth + 1, max_depth);
@@ -250,44 +240,30 @@ std::vector<std::string> Spider::extract_links(const std::string& html) {
     }
     return links;
 }
+
 bool Spider::is_useful_link(const std::string& url) {
-    // 1. Базовые проверки (почта, телефон, файлы) - оставляем как было
     if (url.find("mailto:") == 0 || url.find("tel:") == 0 || url.find("javascript:") == 0) return false;
 
-    static const std::vector<std::string> blacklisted_ext = {
-        ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".zip", ".rar", ".exe", ".docx", ".mp3", ".mp4", ".css", ".js"
+    static const std::vector<std::string> black_ext = {
+        ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".zip", ".rar", ".exe", ".docx", ".mp3", ".mp4", ".css", ".js", ".svg"
     };
-    for (const auto& ext : blacklisted_ext) {
+    for (const auto& ext : black_ext) {
         if (url.size() >= ext.size() && url.compare(url.size() - ext.size(), ext.size(), ext) == 0) return false;
     }
 
-    // 2. ЯЗЫКОВОЙ ФИЛЬТР ДЛЯ ПОДДОМЕНОВ
-    // Если в URL есть признаки других языков в начале домена (например, et.wikipedia, fr.wikipedia)
-    // Мы блокируем их, ЕСЛИ это не ru. или en.
-
-    // Проверяем формат "язык.сайт.com"
-    std::regex lang_subdomain_regex(R"(https?://([a-z]{2})\.)");
-    std::smatch match;
-    if (std::regex_search(url, match, lang_subdomain_regex)) {
-        std::string lang = match[1].str();
-        // Если поддомен состоит из 2 букв (код страны) и это не ru/en - блокируем
-        if (lang != "ru" && lang != "en" && lang != "www") {
-            // Исключение: разрешаем сайты, где 2 буквы это часть имени (например, it.me), 
-            // но для Википедии это работает идеально.
-            if (url.find("wikipedia.org") != std::string::npos) {
-                return false;
-            }
-        }
-    }
-
-    // 3. Фильтр мусорных слов (оставляем)
-    static const std::vector<std::string> blacklisted_keywords = {
-        "adserver", "banner", "marketing", "click", "set_lang", "lang="
+    static const std::vector<std::string> traps = {
+        "Special:", "Policy:", "Legal:", "Terms_of_Use", "Cookie_statement",
+        "Privacy_policy", "wikimediafoundation.org", "mediawiki.org",
+        "action=edit", "action=history", "printable=yes"
     };
+
     std::string url_lower = url;
     std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
-    for (const auto& word : blacklisted_keywords) {
-        if (url_lower.find(word) != std::string::npos) return false;
+
+    for (const auto& word : traps) {
+        std::string low_word = word;
+        std::transform(low_word.begin(), low_word.end(), low_word.begin(), ::tolower);
+        if (url_lower.find(low_word) != std::string::npos) return false;
     }
 
     return true;
