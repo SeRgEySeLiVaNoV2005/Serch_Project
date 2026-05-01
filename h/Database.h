@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <mutex>
 
 struct SearchResult {
     std::string url;
@@ -16,5 +17,6 @@ public:
     void save_indexing_result(const std::string& url, const std::map<std::string, int>& word_freq);
     std::vector<SearchResult> search(const std::vector<std::string>& query_words);
 private:
+    std::mutex db_mtx;
     std::unique_ptr<pqxx::connection> conn;
 };

@@ -46,6 +46,7 @@ void Database::save_indexing_result(const std::string& url, const std::map<std::
     if (word_freq.empty()) return;
 
     try {
+        std::lock_guard<std::mutex> lock(db_mtx);
         pqxx::work W(*conn);
         auto res_doc = W.exec_params(
             "INSERT INTO documents (url) VALUES ($1) ON CONFLICT (url) DO UPDATE SET url=EXCLUDED.url RETURNING id",
@@ -77,6 +78,7 @@ void Database::save_indexing_result(const std::string& url, const std::map<std::
 std::vector<SearchResult> Database::search(const std::vector<std::string>& query_words) {
     if (query_words.empty()) return {};
 
+    std::lock_guard<std::mutex> lock(db_mtx); 
     pqxx::work W(*conn);
 
     std::string word_list;
